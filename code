@@ -1,0 +1,151 @@
+
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
+from scipy.sparse import hstack
+
+
+def generate_synthetic_data(seed=42):
+    np.random.seed(seed)
+
+    tags = pd.DataFrame({
+        'tag_id': range(1, 11),
+        'tag_name': [
+            'fantasy', 'science-fiction', 'romance', 'history',
+            'mystery', 'thriller', 'non-fiction',
+            'adventure', 'classic', 'drama'
+        ]
+    })
+
+    books = pd.DataFrame({
+        'book_id': range(1, 21),
+        'goodreads_book_id': np.arange(1001, 1021)
+    })
+
+    book_tags = pd.DataFrame({
+        'goodreads_book_id': np.random.choice(books['goodreads_book_id'], 50),
+        'tag_id': np.random.choice(tags['tag_id'], 50)
+    })
+
+    ratings = pd.DataFrame({
+        'user_id': np.random.randint(1, 11, 100),
+        'book_id': np.random.choice(books['book_id'], 100),
+        'rating': np.random.randint(1, 6, 100)  # 1–5 stars
+    })
+
+    return tags, books, book_tags, ratings
+
+
+
+def prepare_dataset(tags, books, book_tags, ratings):
+    book_tags = book_tags.merge(tags, on='tag_id', how='left')
+
+    book_genres = (
+        book_tags.groupby('goodreads_book_id')['tag_name']
+        .apply(' '.join)
+        .reset_index(name='genres')
+    )
+
+    df = (
+        ratings.merge(books, on='book_id', how='left')
+               .merge(book_genres, on='goodreads_book_id', how='left')
+    )
+
+    df['liked'] = (df['rating'] > 3).astype(int)
+    df.dropna(subset=['genres'], inplace=True)
+
+    return df
+
+
+def build_features(df):
+    user_encoder = OneHotEncoder(handle_unknown='ignore', sparse=True)
+    genre_vectorizer = CountVectorizer()
+
+    user_features = user_encoder.fit_transform(df[['user_id']])
+    genre_features = genre_vectorizer.fit_transform(df['genres'])
+
+    X = hstack([user_features, genre_features])
+    y = df['liked']
+
+    return X, y, user_encoder, genre_vectorizer
+
+
+def train_model(X_train, y_train):
+    model = MultinomialNB(alpha=1.0)  # Laplace smoothing
+    model.fit(X_train, y_train)
+    return model
+
+
+
+def evaluate_model(model, X_test, y_test):
+    preds = model.predict(X_test)
+
+    print("\n📊 Model Evaluation")
+    print("------------------")
+    print("Accuracy :", accuracy_score(y_test, preds))
+    print("Precision:", precision_score(y_test, preds))
+    print("Recall   :", recall_score(y_test, preds))
+    print("Confusion Matrix:\n", confusion_matrix(y_test, preds))
+
+
+def recommend_book(user_id, book_genres, model, user_encoder, genre_vectorizer):
+    """
+    Predict whether a user will like a book based on genre text.
+    Returns prediction (0/1) and probability of liking.
+    """
+    user_vec = user_encoder.transform([[user_id]])
+    genre_vec = genre_vectorizer.transform([book_genres])
+    features = hstack([user_vec, genre_vec])
+
+    prediction = model.predict(features)[0]
+    probability = model.predict_proba(features)[0][1]
+
+    return prediction, probability
+
+
+
+def main():
+    # Generate data
+    tags, books, book_tags, ratings = generate_synthetic_data()
+
+    # Prepare dataset
+    df = prepare_dataset(tags, books, book_tags, ratings)
+
+    # Feature engineering
+    X, y, user_encoder, genre_vectorizer = build_features(df)
+
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, stratify=y, test_size=0.2, random_state=42
+    )
+
+    # Train model
+    model = train_model(X_train, y_train)
+
+    # Evaluate
+    evaluate_model(model, X_test, y_test)
+
+    # Example recommendation
+    user_id = 3
+    example_genres = "fantasy adventure magic"
+
+    pred, prob = recommend_book(
+        user_id, example_genres,
+        model, user_encoder, genre_vectorizer
+    )
+
+    print("\n📚 Example Recommendation")
+    print("------------------------")
+    print(f"User ID           : {user_id}")
+    print(f"Book Genres       : {example_genres}")
+    print(f"Prediction (Like) : {pred}")
+    print(f"Probability       : {prob:.2f}")
+
+
+if __name__ == "__main__":
+    main()
